@@ -39,8 +39,6 @@ class Mapper(object):
         else:
             self.bpr_args = bpr_args
         self.bpr_model = bpr.BPR(self.bpr_k, self.bpr_args)
-        sample_negative_items_empirically = True
-        self.sampler = bpr.UniformPairWithoutReplacement(sample_negative_items_empirically)
     
     def test_init(self, test_data, test_attr):
         assert sp.isspmatrix_csr(test_data)
@@ -58,7 +56,7 @@ class Mapper(object):
             for i in range(self.num_test_items):
                 cand.append((self.map_predict(u, i), i))
             cand.sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
-            tmp = 0
+            tmp = 0.0
             row_u = self.test_data[u].toarray()[0]
             for i in range(prec_n):
                 if row_u[cand[i][1]]>0:
@@ -71,12 +69,13 @@ class Mapper(object):
         #area under ROC curve, compute , average across users
         result = 0
         for u in range(self.num_users):
-            tmp = 0
+            tmp = 0.0
             for i in range(self.num_test_items):
-                if self.map_predict(u, i)>0:
+                #wrong here, should be compute via comparing actual I+ and I- prediction in test dataset
+                if self.map_predict(u, i)>=0:
                     tmp += 1
             real_pos = len(self.test_data[u].indices)
-            result += tmp/real_pos/(self.num_test_items-real_pos)
+            result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
         result /= self.num_users
         return result 
 
@@ -141,7 +140,7 @@ class CBF_KNN(Mapper):
 class Map_Random(Mapper):
 
     def __init__(self, data, attr, bpr_k=None, bpr_args=None):
-        self.init(self, data, attr, bpr_k, bpr_args)
+        self.init(data, attr, bpr_k, bpr_args)
 
     def train(self, num_iters):
         pass

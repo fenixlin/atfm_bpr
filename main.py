@@ -4,6 +4,7 @@ Main program to perform training, with a splitter to do k-fold cross-validation
 """
 import mapper
 from bpr import BPRArgs, BPR
+from copy import copy
 import numpy as np
 import scipy.sparse as sp
 import sys
@@ -26,7 +27,7 @@ class DataSplitter(object):
         result = []
         for i in range(self.k):
             tmp = []
-            for j in range(self.num_items/self.k):
+            for j in range(min(self.num_items-base, self.num_items/self.k)):
                 tmp.append(self.datamat.getcol(self.index[base+j]))
             base += self.num_items/self.k
             result.append(sp.hstack(tmp))
@@ -37,7 +38,7 @@ class DataSplitter(object):
         result = []
         for i in range(self.k):
             tmp = []
-            for j in range(self.num_items/self.k):
+            for j in range(min(self.num_items-base, self.num_items/self.k)):
                 tmp.append(self.attrmat.getrow(self.index[base+j]))
             base += self.num_items/self.k
             result.append(sp.vstack(tmp))
@@ -63,11 +64,12 @@ if __name__ == '__main__':
     avg_prec = avg_auc = 0
     #training & testing
     for i in range(num_folds):
-        tmp_data = datamats
+        tmp_data = copy(datamats)
         del tmp_data[i]
-        tmp_attr = attrmats
+        tmp_attr = copy(attrmats)
         del tmp_attr[i]
         model = mapper.CBF_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr), bpr_k, bpr_args)
+        #model = mapper.Map_Random(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr), bpr_k, bpr_args)
         model.train(num_iters)
 
         prec, auc = model.test(datamats[i].tocsr(), attrmats[i])
@@ -75,5 +77,5 @@ if __name__ == '__main__':
         print "------------------------------------------------"
         avg_prec += prec
         avg_auc += auc
-    print "avg_prec = ", avg_prec/num_folds, ", avg_auc = ", avg_auc/num_fold
+    print "avg_prec = ", avg_prec/num_folds, ", avg_auc = ", avg_auc/num_folds
 
