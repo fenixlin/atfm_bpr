@@ -65,9 +65,9 @@ if __name__ == '__main__':
     #training & testing
     for i in range(num_folds):
         tmp_data = copy(datamats)
-        del tmp_data[i]
+        tmp_data.pop(i)
         tmp_attr = copy(attrmats)
-        del tmp_attr[i]
+        tmp_attr.pop(i)
         model = mapper.CBF_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr), bpr_k, bpr_args)
         #model = mapper.Map_Random(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr), bpr_k, bpr_args)
         model.train(num_iters)

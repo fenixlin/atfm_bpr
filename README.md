@@ -6,7 +6,7 @@ This is a simple implementation for paper [*Learning Attribute-to-Feature Mappin
 
 In detail, Bayesian Personalized Ranking (BPR) model is a matrix factorization model for item recommendation. However, when new item comes with no rating information (i.e. cold-start), it's better to use the private information (i.e. attributes) to infer probable ratings of the items, or to infer feature of the underlying BPR model for better prediction for new items.
 
-The paper offered four simple mapping functions (and a random prediction as baseline), which make it possible to predict under cold-start situation with underlying BPR model. Please refer to the paper for further detail.
+The paper offers four simple mapping functions (and a random prediction as baseline), which make it possible to predict under cold-start situation with underlying BPR model. Please refer to the paper for further detail.
 
-Code of BPR model are modified from [This repository](https://github.com/gamboviol/bpr). Many thanks to gamboviol.
+Codes of BPR model are modified and refined from [This repository](https://github.com/gamboviol/bpr). Many thanks to gamboviol.
 

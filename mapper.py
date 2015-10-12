@@ -39,48 +39,102 @@ class Mapper(object):
         else:
             self.bpr_args = bpr_args
         self.bpr_model = bpr.BPR(self.bpr_k, self.bpr_args)
+        sample_negative_items_empirically = False
+        self.sampler = bpr.UniformUserUniformItem(sample_negative_items_empirically)
     
     def test_init(self, test_data, test_attr):
         assert sp.isspmatrix_csr(test_data)
         assert sp.isspmatrix_csr(test_attr)
         self.num_test_items, _ = test_attr.shape
         self.test_data = test_data
-
-    def prec_at_n(self, prec_n):
-        #precision of top-n recommended results, average across users
-        prec_n = min(prec_n, self.num_test_items)
-        result = 0
-        for u in range(self.num_users):
-            print "Predicting for user ",u,"......."
-            cand = []
-            for i in range(self.num_test_items):
-                cand.append((self.map_predict(u, i), i))
-            cand.sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
-            tmp = 0.0
-            row_u = self.test_data[u].toarray()[0]
-            for i in range(prec_n):
-                if row_u[cand[i][1]]>0:
-                    tmp += 1
-            result += tmp/prec_n
-        result /= self.num_users
-        return result
-
-    def auc(self):
-        #area under ROC curve, compute , average across users
-        result = 0
-        for u in range(self.num_users):
-            tmp = 0.0
-            for i in range(self.num_test_items):
-                #wrong here, should be compute via comparing actual I+ and I- prediction in test dataset
-                if self.map_predict(u, i)>=0:
-                    tmp += 1
-            real_pos = len(self.test_data[u].indices)
-            result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
-        result /= self.num_users
-        return result 
+        self.test_attr = test_attr
 
     def _row_dot(self, x, y):
         return x.dot(y.transpose()).sum()
+
+    def _cache_attr(self, i):
+        try:
+            self.attr_sqr_cache
+            self.tattr_sqr_cache
+        except:
+            self.attr_sqr_cache = []
+            self.tattr_sqr_cache = []
+            for j in range(self.num_items):
+                self.attr_sqr_cache.append(self._row_dot(self.attr[j], self.attr[j]))
+            for j in range(self.num_test_items):
+                self.tattr_sqr_cache.append(self._row_dot(self.test_attr[j], self.test_attr[j]))
+        self.sim_cache = []
+        for j in range(self.num_items):
+            self.sim_cache.append(self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self.tattr_sqr_cache[i] * self.attr_sqr_cache[j]))
+
+    def prec_at_n(self, prec_n, caching=True):
+        #precision of top-n recommended results, average across users
+        prec_n = min(prec_n, self.num_test_items)
+        result = 0
+        if caching:
+            cand = [[] for i in range(self.num_users)]
+            for i in range(self.num_test_items):
+                self._cache_attr(i)
+                for u in range(self.num_users):
+                    cand[u].append((self.map_predict(u, i, caching), i))
+            for u in range(self.num_users):
+                cand[u].sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
+                tmp = 0.0
+                row_u = self.test_data[u].toarray()[0]
+                for i in range(prec_n):
+                    if row_u[cand[u][i][1]]>0:
+                        tmp += 1
+                result += tmp/prec_n
+        else:
+            for u in range(self.num_users):
+                print "Predicting for user ",u,"......."
+                cand = []
+                for i in range(self.num_test_items):
+                    cand.append((self.map_predict(u, i), i))
+                cand.sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
+                tmp = 0.0
+                row_u = self.test_data[u].toarray()[0]
+                for i in range(prec_n):
+                    if row_u[cand[i][1]]>0:
+                        tmp += 1
+                result += tmp/prec_n
+        result /= self.num_users
+        return result
+
+    def auc(self, caching=True):
+        #area under ROC curve, compute , average across users
+        result = 0
+        if caching:
+            pred = [[] for i in range(self.num_users)]
+            for i in range(self.num_test_items):
+                self._cache_attr(i)
+                for u in range(self.num_users):
+                    pred[u].append(self.map_predict(u, i, caching))
+            for u in range(self.num_users):
+                tmp = 0.0
+                posidx = self.test_data[u].indices
+                for j in range(self.num_test_items):
+                    if j in posidx:
+                        continue
+                    for i in posidx:
+                        if pred[u][i]-pred[u][j]>=0:
+                            tmp += 1
+                real_pos = len(self.test_data[u].indices)
+                result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
+        else:
+            for u in range(self.num_users):
+                tmp = 0.0
+                posidx = self.test_data[u].indices
+                for j in range(self.num_test_items):
+                    if j in posidx:
+                        continue
+                    for i in posidx:
+                        if self.map_predict(u, i)-self.map_predict(u, j)>=0:
+                            tmp += 1
+                real_pos = len(self.test_data[u].indices)
+                result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
+        result /= self.num_users
+        return result 
 
 class Map_KNN(Mapper):
 
@@ -115,23 +169,29 @@ class CBF_KNN(Mapper):
 
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr)
-        sp.vstack( [self.attr, test_attr] ).tocsr()
-           
         return [self.prec_at_n(prec_n), self.auc()]   
         
-    def bpr_predict(self, u, i):
+    #def bpr_predict(self, u, i):
         #return bpr_model.predict(self, u, i)
-        pass
 
-    def map_predict(self, u, i):
+    def map_predict(self, u, i, cached=False):
         result = 0
         if self.k==None:
-            for j in self.data[u].indices:
-                result += self._row_dot(self.attr[i], self.attr[j]) / sqrt(self._row_dot(self.attr[i], self.attr[i]) * self._row_dot(self.attr[j], self.attr[j]))
+            if cached:
+                for j in self.data[u].indices:
+                    result += self.sim_cache[j]
+            else:
+                for j in self.data[u].indices:
+                    result += self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self._row_dot(self.test_attr[i], self.test_attr[i]) * self._row_dot(self.attr[j], self.attr[j]))
         else:
-            sim = []
-            for j in self.data[u].indices:
-                sim.append(self._row_dot(self.attr[i], self.attr[j]) / sqrt(self._row_dot(self.attr[i], self.attr[i]) * self._row_dot(self.attr[j], self.attr[j])))
+            if cached:
+                sim = []
+                for j in self.data[u].indices:
+                    sim.append(self.sim_cache[j])
+            else:
+                sim = []
+                for j in self.data[u].indices:
+                    sim.append(self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self._row_dot(self.test_attr[i], self.test_attr[i]) * self._row_dot(self.attr[j], self.attr[j])))
             sim.sort()
             for j in range(self.k):
                 result += sim[j]
@@ -149,5 +209,5 @@ class Map_Random(Mapper):
         self.test_init(test_data, test_attr)
         return [self.prec_at_n(prec_n), self.auc()]   
 
-    def map_predict(self, u, i):
-        return random.random()
+    def map_predict(self, u, i, cached=False, max_score=1.0):
+        return random.random() * max_score
