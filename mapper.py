@@ -17,6 +17,8 @@ import bpr
 from math import sqrt
 import numpy as np
 import scipy.sparse as sp
+import data_splitter as ds
+from copy import copy
 import sys
 import random
 
@@ -52,10 +54,10 @@ class Mapper(object):
     def _row_dot(self, x, y):
         return x.dot(y.transpose()).sum()
 
-    def _cache_attr(self, i):
+    def cos_similarity(self, i):
         try:
-            self.attr_sqr_cache
-            self.tattr_sqr_cache
+            assert len(self.attr_sqr_cache) == len(self.attr)
+            assert len(self.tattr_sqr_cache) == len(self.test_attr)
         except:
             self.attr_sqr_cache = []
             self.tattr_sqr_cache = []
@@ -63,9 +65,13 @@ class Mapper(object):
                 self.attr_sqr_cache.append(self._row_dot(self.attr[j], self.attr[j]))
             for j in range(self.num_test_items):
                 self.tattr_sqr_cache.append(self._row_dot(self.test_attr[j], self.test_attr[j]))
-        self.sim_cache = []
+        similarity = []
         for j in range(self.num_items):
-            self.sim_cache.append(self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self.tattr_sqr_cache[i] * self.attr_sqr_cache[j]))
+            similarity.append(self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self.tattr_sqr_cache[i] * self.attr_sqr_cache[j]))
+        return similarity
+
+    def accuracy(self, threshold=0.5):
+        pass
 
     def prec_at_n(self, prec_n, caching=True):
         #precision of top-n recommended results, average across users
@@ -74,9 +80,9 @@ class Mapper(object):
         if caching:
             cand = [[] for i in range(self.num_users)]
             for i in range(self.num_test_items):
-                self._cache_attr(i)
+                pred_i = self.map_predict(i)
                 for u in range(self.num_users):
-                    cand[u].append((self.map_predict(u, i, caching), i))
+                    cand[u].append((pred_i[u], i))
             for u in range(self.num_users):
                 cand[u].sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
                 tmp = 0.0
@@ -136,17 +142,72 @@ class Mapper(object):
         result /= self.num_users
         return result 
 
+    def cross_validation(self, cv_num_iters, cv_set, cv_fold):
+        origin_data = self.data
+        origin_attr = self.attr
+        splitter = ds.DataSplitter(origin_data, origin_attr, cv_fold)
+        datamats = splitter.split_data()
+        attrmats = splitter.split_attr()
+        bestacc = 0
+        bestpara = None
+        for para in cv_set:
+            self.set_parameter(para)
+            avg_acc = 0
+            for i in range(cv_fold):
+                tmp_data = copy(datamats)
+                tmp_data.pop(i)
+                tmp_attr = copy(attrmats)
+                tmp_attr.pop(i)
+                self.init(tmp_data, tmp_attr, self.bpr_k, self.bpr_args)
+                self.train(cv_num_iters)
+                self.test_init(datamats[i])
+                avg_acc += self.accuracy()
+            avg_acc /= cv_fold
+            if (avg_acc > bestacc):
+                bestpara = para
+        self.data = origin_data
+        self.attr = origin_attr
+        return para
+
 class Map_KNN(Mapper):
 
-    def __init__(self, data, attr, bpr_k=None, bpr_args=None, k=None):
-        pass
+    def __init__(self, data, attr, bpr_k=None, bpr_args=None, k=1):
+        self.init(data, attr, bpr_k, bpr_args)
+        self.k = k
+
+    def set_parameter(self, k):
+        self.k = k
+
+    def train(self, num_iters):
+        self.bpr_model.train(self.data, self.sampler, num_iters)
+        
+    def test(self, test_data, test_attr, prec_n=5):
+        self.test_init(test_data, test_attr)
+        return [self.prec_at_n(prec_n), self.auc()]   
+
+    def map_predict(self, i, u=None):
+        result = []
+        if u==None:
+            cos_sim = self.cos_similarity(i)
+            cand = [(cos_sim[i], i) for i in range(self.num_users)]
+            cand.sort(lambda x,y: cmp(x[0],y[0]), reverse=True)
+            #average new h from top-k h vectors, and predict with bpr
+            i_factors = np.zeros(self.bpr_k)
+            i_bias = 0
+            for j in range(self.k):
+                i_factors += self.bpr_model.item_factors[cand[j][1],:]
+                i_bias += self.bpr_model.item_bias[cand[j][1]]
+            i_factors /= self.k
+            i_bias /= self.k
+            for j in range(self.num_users):
+        return result
 
 class Map_Linear(Mapper):
 
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty=None):
         pass
 
-    def _cross_validation():
+    def set_parameter(self, para_set):
         pass
 
 class Map_BPR(Mapper):
@@ -154,8 +215,9 @@ class Map_BPR(Mapper):
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty=None):
         pass
 
-    def _cross_validation():
+    def set_parameter(self, para_set):
         pass
+
 
 class CBF_KNN(Mapper):
 
@@ -163,38 +225,49 @@ class CBF_KNN(Mapper):
         self.init(data, attr, bpr_k, bpr_args)
         self.k = k
 
+    def set_parameter(self, k):
+        self.k = k
+
     def train(self, num_iters):
-        #self.bpr_model.train(self.data, self.sampler, num_iters)
-        pass
+        pass # underlying bpr model is useless in test, so just train nothing
 
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr)
         return [self.prec_at_n(prec_n), self.auc()]   
-        
-    #def bpr_predict(self, u, i):
-        #return bpr_model.predict(self, u, i)
 
-    def map_predict(self, u, i, cached=False):
-        result = 0
-        if self.k==None:
-            if cached:
-                for j in self.data[u].indices:
-                    result += self.sim_cache[j]
+    def map_predict(self, i, u==None):
+        if u==None:
+            result = []
+            cos_sim = self.cos_similarity(i)
+            if self.k==None:
+                # k is infinity by default
+                for u in range(self.num_users):
+                    pred_j = 0
+                    for j in self.data[u].indices:
+                        pred_j += cos_sim[j]
+                    result.append(pred_j)
             else:
+                for u in range(self.num_users):
+                    cand = []
+                    for j in self.data[u].indices:
+                        cand.append(cos_sim[j])
+                    cand.sort()
+                    pred_j = 0
+                    for j in range(self.k):
+                        pred_j += cand[j]
+                    result.append(pred_j)
+        else:
+            result = 0
+            if self.k==None:
                 for j in self.data[u].indices:
                     result += self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self._row_dot(self.test_attr[i], self.test_attr[i]) * self._row_dot(self.attr[j], self.attr[j]))
-        else:
-            if cached:
-                sim = []
-                for j in self.data[u].indices:
-                    sim.append(self.sim_cache[j])
             else:
                 sim = []
                 for j in self.data[u].indices:
                     sim.append(self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self._row_dot(self.test_attr[i], self.test_attr[i]) * self._row_dot(self.attr[j], self.attr[j])))
-            sim.sort()
-            for j in range(self.k):
-                result += sim[j]
+                sim.sort()
+                for j in range(self.k):
+                    result += sim[j]
         return result
 
 class Map_Random(Mapper):
@@ -209,5 +282,8 @@ class Map_Random(Mapper):
         self.test_init(test_data, test_attr)
         return [self.prec_at_n(prec_n), self.auc()]   
 
-    def map_predict(self, u, i, cached=False, max_score=1.0):
-        return random.random() * max_score
+    def map_predict(self, i, max_score=1.0, u=None):
+        if u==None:
+            return [(random.random() * max_score) for i in range(self.num_users)]
+        else:
+            return random.random() * max_score

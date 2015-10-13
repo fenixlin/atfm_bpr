@@ -117,7 +117,6 @@ class BPR(object):
     def predict(self,u,i):
         return self.item_bias[i] + np.dot(self.user_factors[u],self.item_factors[i])
 
-
 # sampling strategies
 
 class Sampler(object):

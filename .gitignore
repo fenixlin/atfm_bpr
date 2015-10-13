@@ -1,3 +1,4 @@
 *.pyc
 *.mat
 .*.*.swp
+test*.py
