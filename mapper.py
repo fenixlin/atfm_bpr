@@ -71,74 +71,56 @@ class Mapper(object):
         return similarity
 
     def accuracy(self, threshold=0.5):
-        pass
+        result = 0.0
+        for i in range(self.num_items):
+            pred_i = self.map_predict(i)
+            for u in range(self.num_users):
+                posidx = self.test_data[u].indices
+                if (pred_i[u]>=threshold and (i in posidx)) or (pred_i[u]<threshold and (not i in posidx)):
+                    result +=1
+        result /= (self.num_items * self.num_users)
+        return result
 
-    def prec_at_n(self, prec_n, caching=True):
+    def prec_at_n(self, prec_n):
         #precision of top-n recommended results, average across users
         prec_n = min(prec_n, self.num_test_items)
         result = 0
-        if caching:
-            cand = [[] for i in range(self.num_users)]
-            for i in range(self.num_test_items):
-                pred_i = self.map_predict(i)
-                for u in range(self.num_users):
-                    cand[u].append((pred_i[u], i))
+        
+        cand = [[] for i in range(self.num_users)]
+        for i in range(self.num_test_items):
+            pred_i = self.map_predict(i)
             for u in range(self.num_users):
-                cand[u].sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
-                tmp = 0.0
-                row_u = self.test_data[u].toarray()[0]
-                for i in range(prec_n):
-                    if row_u[cand[u][i][1]]>0:
-                        tmp += 1
-                result += tmp/prec_n
-        else:
-            for u in range(self.num_users):
-                print "Predicting for user ",u,"......."
-                cand = []
-                for i in range(self.num_test_items):
-                    cand.append((self.map_predict(u, i), i))
-                cand.sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
-                tmp = 0.0
-                row_u = self.test_data[u].toarray()[0]
-                for i in range(prec_n):
-                    if row_u[cand[i][1]]>0:
-                        tmp += 1
-                result += tmp/prec_n
+                cand[u].append((pred_i[u], i))
+        for u in range(self.num_users):
+            cand[u].sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
+            tmp = 0.0
+            row_u = self.test_data[u].toarray()[0]
+            for i in range(prec_n):
+                if row_u[cand[u][i][1]]>0:
+                    tmp += 1
+            result += tmp/prec_n
         result /= self.num_users
         return result
 
-    def auc(self, caching=True):
+    def auc(self):
         #area under ROC curve, compute , average across users
         result = 0
-        if caching:
-            pred = [[] for i in range(self.num_users)]
-            for i in range(self.num_test_items):
-                self._cache_attr(i)
-                for u in range(self.num_users):
-                    pred[u].append(self.map_predict(u, i, caching))
+        pred = [[] for i in range(self.num_users)]
+        for i in range(self.num_test_items):
+            self._cache_attr(i)
             for u in range(self.num_users):
-                tmp = 0.0
-                posidx = self.test_data[u].indices
-                for j in range(self.num_test_items):
-                    if j in posidx:
-                        continue
-                    for i in posidx:
-                        if pred[u][i]-pred[u][j]>=0:
-                            tmp += 1
-                real_pos = len(self.test_data[u].indices)
-                result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
-        else:
-            for u in range(self.num_users):
-                tmp = 0.0
-                posidx = self.test_data[u].indices
-                for j in range(self.num_test_items):
-                    if j in posidx:
-                        continue
-                    for i in posidx:
-                        if self.map_predict(u, i)-self.map_predict(u, j)>=0:
-                            tmp += 1
-                real_pos = len(self.test_data[u].indices)
-                result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
+                pred[u].append(self.map_predict(u, i, caching))
+        for u in range(self.num_users):
+            tmp = 0.0
+            posidx = self.test_data[u].indices
+            for j in range(self.num_test_items):
+                if j in posidx:
+                    continue
+                for i in posidx:
+                    if pred[u][i]-pred[u][j]>=0:
+                        tmp += 1
+            real_pos = len(self.test_data[u].indices)
+            result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
         result /= self.num_users
         return result 
 
@@ -185,39 +167,62 @@ class Map_KNN(Mapper):
         self.test_init(test_data, test_attr)
         return [self.prec_at_n(prec_n), self.auc()]   
 
-    def map_predict(self, i, u=None):
+    def map_predict(self, i):
         result = []
-        if u==None:
-            cos_sim = self.cos_similarity(i)
-            cand = [(cos_sim[i], i) for i in range(self.num_users)]
-            cand.sort(lambda x,y: cmp(x[0],y[0]), reverse=True)
-            #average new h from top-k h vectors, and predict with bpr
-            i_factors = np.zeros(self.bpr_k)
-            i_bias = 0
-            for j in range(self.k):
-                i_factors += self.bpr_model.item_factors[cand[j][1],:]
-                i_bias += self.bpr_model.item_bias[cand[j][1]]
-            i_factors /= self.k
-            i_bias /= self.k
-            for j in range(self.num_users):
+        cos_sim = self.cos_similarity(i)
+        cand = [(cos_sim[i], i) for i in range(self.num_users)]
+        cand.sort(lambda x,y: cmp(x[0],y[0]), reverse=True)
+        #average new h from top-k h vectors, and predict with bpr
+        i_factors = np.zeros(self.bpr_k)
+        i_bias = 0
+        for j in range(self.k):
+            i_factors += self.bpr_model.item_factors[cand[j][1],:]
+            i_bias += self.bpr_model.item_bias[cand[j][1]]
+        i_factors /= self.k
+        i_bias /= self.k
+        for j in range(self.num_users):
+            result.append(i_bias + np.dot(self.bpr_model.user_factors[u], i_factors))
         return result
 
 class Map_Linear(Mapper):
 
-    def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty=None):
+    def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty_factor=None):
+        self.init(data, attr, bpr_k, bpr_args)
+        self.learning_rate = learning_rate
+        self.penalty_factor = penalty_factor
+
+    def train(self, num_iters):
+        #TODO
+        #train a linear model across attributes(X=attrs, Y=H)
+        pass
+
+    def test(self, test_data, test_attr, prec_n=5):
+        #TODO
         pass
 
     def set_parameter(self, para_set):
-        pass
+        self.learning_rate = para_set[0]
+        self.penalty_factor = para_set[1]
 
 class Map_BPR(Mapper):
 
-    def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty=None):
+    def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty_factor=None):
+        self.init(data, attr, bpr_k, bpr_args)
+        self.learning_rate = learning_rate
+        self.penalty_factor = penalty_factor
+
+    def train(self, num_iters):
+        #TODO
+        #train a linear model across attributes(X=attrs, Y=H)
+        pass
+
+    def test(self, test_data, test_attr, prec_n=5):
+        #TODO
         pass
 
     def set_parameter(self, para_set):
-        pass
-
+        self.learning_rate = para_set[0]
+        self.penalty_factor = para_set[1]
 
 class CBF_KNN(Mapper):
 
@@ -229,45 +234,33 @@ class CBF_KNN(Mapper):
         self.k = k
 
     def train(self, num_iters):
-        pass # underlying bpr model is useless in test, so just train nothing
+        # underlying bpr model is useless, so no need to train
+        pass 
 
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr)
         return [self.prec_at_n(prec_n), self.auc()]   
 
-    def map_predict(self, i, u==None):
-        if u==None:
-            result = []
-            cos_sim = self.cos_similarity(i)
-            if self.k==None:
-                # k is infinity by default
-                for u in range(self.num_users):
-                    pred_j = 0
-                    for j in self.data[u].indices:
-                        pred_j += cos_sim[j]
-                    result.append(pred_j)
-            else:
-                for u in range(self.num_users):
-                    cand = []
-                    for j in self.data[u].indices:
-                        cand.append(cos_sim[j])
-                    cand.sort()
-                    pred_j = 0
-                    for j in range(self.k):
-                        pred_j += cand[j]
-                    result.append(pred_j)
+    def map_predict(self, i):
+        result = []
+        cos_sim = self.cos_similarity(i)
+        if self.k==None:
+            # k is infinity by default
+            for u in range(self.num_users):
+                pred_j = 0
+                for j in self.data[u].indices:
+                    pred_j += cos_sim[j]
+                result.append(pred_j)
         else:
-            result = 0
-            if self.k==None:
+            for u in range(self.num_users):
+                cand = []
                 for j in self.data[u].indices:
-                    result += self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self._row_dot(self.test_attr[i], self.test_attr[i]) * self._row_dot(self.attr[j], self.attr[j]))
-            else:
-                sim = []
-                for j in self.data[u].indices:
-                    sim.append(self._row_dot(self.test_attr[i], self.attr[j]) / sqrt(self._row_dot(self.test_attr[i], self.test_attr[i]) * self._row_dot(self.attr[j], self.attr[j])))
-                sim.sort()
+                    cand.append(cos_sim[j])
+                cand.sort()
+                pred_j = 0
                 for j in range(self.k):
-                    result += sim[j]
+                    pred_j += cand[j]
+                result.append(pred_j)
         return result
 
 class Map_Random(Mapper):
@@ -276,14 +269,12 @@ class Map_Random(Mapper):
         self.init(data, attr, bpr_k, bpr_args)
 
     def train(self, num_iters):
+        #no need to train
         pass
 
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr)
         return [self.prec_at_n(prec_n), self.auc()]   
 
-    def map_predict(self, i, max_score=1.0, u=None):
-        if u==None:
-            return [(random.random() * max_score) for i in range(self.num_users)]
-        else:
-            return random.random() * max_score
+    def map_predict(self, i, max_score=1.0):
+        return [(random.random() * max_score) for i in range(self.num_users)]
