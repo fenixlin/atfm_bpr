@@ -78,6 +78,7 @@ class BPR(object):
         x = self.item_bias[i] - self.item_bias[j] \
             + np.dot(self.user_factors[u,:],self.item_factors[i,:]-self.item_factors[j,:])
 
+        #XXX: maybe it should be exp(-x)/(1.0+exp(-x))
         z = 1.0/(1.0+exp(x))
 
         # update bias terms
