@@ -14,7 +14,7 @@ A, W, H, S matrix might be needed.
 """
 
 import bpr
-from math import sqrt
+from math import sqrt, exp
 import numpy as np
 import scipy.sparse as sp
 import data_splitter as ds
@@ -35,6 +35,7 @@ class Mapper(object):
         print "Mapper train data : ", self.num_users, "x", self.num_items
         self.attr = attr
         assert attr.shape[0] >= self.num_items
+        _, self.num_attrs = attr.shape
         self.bpr_k = [self.num_users/5,bpr_k][bpr_k!=None]
         if bpr_args==None:
             self.bpr_args = bpr.BPRArgs(0.01, 1.0, 0.02125, 0.00355, 0.00355)
@@ -71,6 +72,7 @@ class Mapper(object):
         return similarity
 
     def accuracy(self, threshold=0.5):
+        #FIXME: not tested
         result = 0.0
         for i in range(self.num_items):
             pred_i = self.map_predict(i)
@@ -107,9 +109,9 @@ class Mapper(object):
         result = 0
         pred = [[] for i in range(self.num_users)]
         for i in range(self.num_test_items):
-            self._cache_attr(i)
+            pred_i = self.map_predict(i)
             for u in range(self.num_users):
-                pred[u].append(self.map_predict(u, i, caching))
+                pred[u].append(pred_i[u])
         for u in range(self.num_users):
             tmp = 0.0
             posidx = self.test_data[u].indices
@@ -125,6 +127,7 @@ class Mapper(object):
         return result 
 
     def cross_validation(self, cv_num_iters, cv_set, cv_fold):
+        #FIXME: not tested
         origin_data = self.data
         origin_attr = self.attr
         splitter = ds.DataSplitter(origin_data, origin_attr, cv_fold)
@@ -153,6 +156,7 @@ class Mapper(object):
 
 class Map_KNN(Mapper):
 
+    #FIXME: not tested
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, k=1):
         self.init(data, attr, bpr_k, bpr_args)
         self.k = k
@@ -186,19 +190,43 @@ class Map_KNN(Mapper):
 
 class Map_Linear(Mapper):
 
+    #FIXME: not tested
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty_factor=None):
         self.init(data, attr, bpr_k, bpr_args)
         self.learning_rate = learning_rate
         self.penalty_factor = penalty_factor
 
     def train(self, num_iters):
-        #TODO
-        #train a linear model across attributes(X=attrs, Y=H)
-        pass
+        self.bpr_model.train(self.data, self.sampler, num_iters)
+        #train linear models for bpr_k column across attributes(X=attrs, Y=H[u])
+        self.mapper_factors = np.random.random_sample((self.bpr_k, self.num_attrs))
+        self.mapper_bias = np.zeros(self.bpr_k)
+        self.mapper_factors_b = np.random.random_sample(self.num_attrs)
+        self.mapper_bias_b = np.zeros(1)
+        x = self.attrs.toarray()
+        for _ in range(num_iters):
+            gradient = np.dot( \
+                np.dot(self.mapper_factors, x.transpose())+self.mapper_bias*np.ones(num_items)-self.bpr_model.item_factors.transpose() \
+                , x) \
+                + self.penalty_factor*self.mapper_factors
+            self.mapper_factors -= self.learning_rate/self.num_items*gradient
+            gradient_b = np.dot( \
+                np.dot(self.mapper_factors_b, x.transpose())+self.mapper_bias_b*np.ones(num_items)-self.bpr_model.item_bias) \
+                , x) \
+                + self.penalty_factor*self.mapper_factors_b
+            self.mapper_factors_b -= self.learning_rate/self.num_items*gradient_b
 
     def test(self, test_data, test_attr, prec_n=5):
-        #TODO
-        pass
+        self.test_init(test_data, test_attr) 
+        return [self.prec_at_n(prec_n), self.auc()]   
+
+    def map_predict(self, i):
+        result = []
+        i_factors = self.mapper_bias + np.dot(self.mapper_factors, self.test_attr[i].transpose().toarray())
+        i_bias = self.mapper_bias_b + np.dot(self.mapper_factors_b, self.test_attr[i].transpose().toarray())
+        for j in range(self.num_users):
+            result.append(i_bias + np.dot(self.bpr_model.user_factors[u], i_factors))
+        return result
 
     def set_parameter(self, para_set):
         self.learning_rate = para_set[0]
@@ -212,11 +240,31 @@ class Map_BPR(Mapper):
         self.penalty_factor = penalty_factor
 
     def train(self, num_iters):
-        #TODO
+        self.bpr_model.train(self.data, self.sampler, num_iters)
         #train a linear model across attributes(X=attrs, Y=H)
-        pass
+        self.mapper_factors = np.random.random_sample((self.bpr_k, self.num_attrs))
+        self.mapper_bias = np.zeros(self.bpr_k)
+        self.mapper_factors_b = np.random.random_sample(self.num_attrs)
+        self.mapper_bias_b = np.zeros(1)
+        x = self.attrs.toarray()
+        for _ in range(num_iters):
+            for u,i,j in self.sampler.generate_samples(self.data):
+                x = self.mapper_bias[i] - self.mapper_bias[j] \
+                    + np.dot(self.bpr_model.user_factors[u,:] \
+                    , np.dot(self.mapper_factors, x.transpose()) )
+                z = 1.0/(1.0+exp(x))
+
+                #XXX: bias, positive and negative may have different penalty factor
+                self.mapper_bias[i] += self.learning_rate * (z - self.penalty_factor*self.mapper_bias[i])
+                self.mapper_bias[j] += self.learning_rate * (-z - self.penalty_factor*self.mapper_bias[j])
+                self.mapper_factors[i] #TODO : here should be modified with attr added from origin bpr model
+                self.mapper_factors[j] 
 
     def test(self, test_data, test_attr, prec_n=5):
+        self.test_init(test_data, test_attr) 
+        return [self.prec_at_n(prec_n), self.auc()]   
+
+    def map_predict(self, i):
         #TODO
         pass
 
