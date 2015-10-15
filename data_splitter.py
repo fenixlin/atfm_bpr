@@ -5,9 +5,9 @@ import random
 class DataSplitter(object):
 
     def __init__(self, datamat, attrmat, k):
-        assert sp.isspmatrix_csc(datamat)
+        assert sp.isspmatrix_csr(datamat)
         assert sp.isspmatrix_csr(attrmat)
-        self.datamat = datamat
+        self.datamat = datamat.tocsc()
         self.attrmat = attrmat
         self.k = k
         _, self.num_items = datamat.shape

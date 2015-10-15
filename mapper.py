@@ -74,12 +74,12 @@ class Mapper(object):
     def accuracy(self, threshold=0.5):
         #FIXME: not tested
         result = 0.0
-        for i in range(self.num_items):
+        for i in range(self.num_test_items):
             pred_i = self.test_predict(i)
             for u in range(self.num_users):
                 posidx = self.test_data[u].indices
                 if (pred_i[u]>=threshold and (i in posidx)) or (pred_i[u]<threshold and (not i in posidx)):
-                    result +=1
+                    result += 1.
         result /= (self.num_items * self.num_users)
         return result
 
@@ -126,11 +126,12 @@ class Mapper(object):
         result /= self.num_users
         return result 
 
-    def cross_validation(self, cv_num_iters, cv_set, cv_fold):
+    def cross_validation(self, cv_num_iters, cv_set, cv_folds):
         #FIXME: not tested
         origin_data = self.data
         origin_attr = self.attr
-        splitter = ds.DataSplitter(origin_data, origin_attr, cv_fold)
+        origin_model = self.bpr_model
+        splitter = ds.DataSplitter(origin_data, origin_attr, cv_folds)
         datamats = splitter.split_data()
         attrmats = splitter.split_attr()
         bestacc = 0
@@ -138,20 +139,23 @@ class Mapper(object):
         for para in cv_set:
             self.set_parameter(para)
             avg_acc = 0
-            for i in range(cv_fold):
+            print "Cross-validating parameter",para
+            for i in range(cv_folds):
                 tmp_data = copy(datamats)
                 tmp_data.pop(i)
                 tmp_attr = copy(attrmats)
                 tmp_attr.pop(i)
-                self.init(tmp_data, tmp_attr, self.bpr_k, self.bpr_args)
+                self.init(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), self.bpr_k, self.bpr_args)
                 self.train(cv_num_iters)
-                self.test_init(datamats[i])
+                self.test_init(datamats[i].tocsr(), attrmats[i].tocsr())
                 avg_acc += self.accuracy()
-            avg_acc /= cv_fold
+            avg_acc /= cv_folds
             if (avg_acc > bestacc):
                 bestpara = para
+        print "best parameter in cross-validation :", bestpara, "with accuracy", bestacc
         self.data = origin_data
         self.attr = origin_attr
+        self.bpr_model = origin_model
         return para
 
 class Map_KNN(Mapper):
@@ -184,7 +188,7 @@ class Map_KNN(Mapper):
             i_bias += self.bpr_model.item_bias[cand[j][1]]
         i_factors /= self.k
         i_bias /= self.k
-        for j in range(self.num_users):
+        for u in range(self.num_users):
             result.append(i_bias + np.dot(self.bpr_model.user_factors[u], i_factors))
         return result
 
@@ -211,7 +215,7 @@ class Map_Linear(Mapper):
                 + self.penalty_factor*self.mapper_factors
             self.mapper_factors -= self.learning_rate/self.num_items*gradient
             gradient_b = np.dot( \
-                np.dot(self.mapper_factors_b, x.transpose())+self.mapper_bias_b*np.ones(num_items)-self.bpr_model.item_bias) \
+                np.dot(self.mapper_factors_b, x.transpose())+self.mapper_bias_b*np.ones(num_items)-self.bpr_model.item_bias \
                 , x) \
                 + self.penalty_factor*self.mapper_factors_b
             self.mapper_factors_b -= self.learning_rate/self.num_items*gradient_b
@@ -256,7 +260,7 @@ class Map_BPR(Mapper):
 
                 gradient = z * np.dot( \
                     self.bpr_model.user_factors[u,:].transpose() \
-                    , x[i]-x[j] ) \
+                    , x[i]-x[j] ) 
                 self.mapper_factors = self.learning_rate * ( \
                     gradient - self.penalty_factor * self.mapper_factors )
                 self.mapper_bias = self.learning_rate * ( \

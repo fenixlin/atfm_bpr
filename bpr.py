@@ -45,12 +45,12 @@ class BPR(object):
         """
         self.init(data)
 
-        print 'initial loss = {0}'.format(self.loss())
+        #print 'initial loss = {0}'.format(self.loss())
         for it in xrange(num_iters):
-            print 'starting iteration {0}'.format(it)
+            #print 'starting iteration {0}'.format(it)
             for u,i,j in sampler.generate_samples(self.data):
                 self.update_factors(u,i,j)
-            print 'iteration {0}: loss = {1}'.format(it,self.loss())
+            #print 'iteration {0}: loss = {1}'.format(it,self.loss())
 
     def init(self,data):
         self.data = data
@@ -67,9 +67,12 @@ class BPR(object):
         # apply rule of thumb to decide num samples over which to compute loss
         num_loss_samples = int(100*self.num_users**0.5)
 
-        print 'sampling {0} <user,item i,item j> triples...'.format(num_loss_samples)
+        #print 'sampling {0} <user,item i,item j> triples...'.format(num_loss_samples)
         sampler = UniformUserUniformItem(True)
-        self.loss_samples = [t for t in sampler.generate_samples(self.data,num_loss_samples)]
+        while True:
+            self.loss_samples = [t for t in sampler.generate_samples(self.data,num_loss_samples)]
+            if len(self.loss_samples)>0:
+                break
 
     def update_factors(self,u,i,j,update_u=True,update_i=True):
         """apply SGD update"""
@@ -151,7 +154,10 @@ class Sampler(object):
         """
         if self.sample_negative_items_empirically:
             # just pick something someone rated!
-            u = self.uniform_user()
+            while True:
+                u = self.uniform_user()
+                if (len(self.data[u].indices)>0):
+                    break
             i = random.choice(self.data[u].indices)
         else:
             i = random.randint(0,self.num_items-1)
@@ -166,13 +172,17 @@ class UniformUserUniformItem(Sampler):
 
     def generate_samples(self,data,max_samples=None):
         self.init(data,max_samples)
-        print self.num_samples(self.data.nnz), " samples to generate..."
+        #print self.num_samples(self.data.nnz), " samples to generate..."
         for _ in xrange(self.num_samples(self.data.nnz)):
             u = self.uniform_user()
             # sample positive item
-            i = random.choice(self.data[u].indices)
-            j = self.sample_negative_item(self.data[u].indices)
-            yield u,i,j
+            try:
+                i = random.choice(self.data[u].indices)
+                j = self.sample_negative_item(self.data[u].indices)
+                yield u,i,j
+            except:
+                # throw out one sample if unable to sample negative item
+                continue
 
 class UniformUserUniformItemWithoutReplacement(Sampler):
 
