@@ -24,11 +24,11 @@ if __name__ == '__main__':
     datamats = splitter.split_data()
     attrmats = splitter.split_attr()
 
-    bpr_args = BPRArgs(0.01, 1.0, 0.02125, 0.00355, 0.00355)
-    bpr_k = 32
-    cv_iters = 3
+    bpr_args = BPRArgs(0.1, 1.0, 0.2125, 0.0355, 0.0355)
+    bpr_k = 3
+    cv_iters = 30
     cv_folds = 4
-    num_iters = 10
+    num_iters = 100
     avg_prec = avg_auc = 0
     #training & testing
     for i in range(num_folds):
@@ -37,8 +37,14 @@ if __name__ == '__main__':
         tmp_attr = copy(attrmats)
         tmp_attr.pop(i)
 
-        cv_parameter_set = [1, 2, 3]
-        model = mapper.Map_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+        cv_parameter_set = [(0.03,0.03), (0.03,0.1), (0.1,0.03), (0.1,0.1)]
+        model = mapper.Map_BPR(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+
+        #cv_parameter_set = [(0.03,0.03), (0.03,0.1), (0.1,0.03), (0.1,0.1)]
+        #model = mapper.Map_Linear(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+
+        #cv_parameter_set = [1, 2, 3]
+        #model = mapper.Map_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
 
         #model = mapper.CBF_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
 

@@ -27,21 +27,30 @@ class Mapper(object):
     def __init__(self):
         pass
 
-    def init(self, data, attr, bpr_k=None, bpr_args=None):
+    def init(self, data, attr, bpr_k=None, bpr_args=None, bpr_model=None):
         assert sp.isspmatrix_csr(data)
         assert sp.isspmatrix_csr(attr)
         self.data = data
         self.num_users, self.num_items = data.shape
-        print "Mapper train data : ", self.num_users, "x", self.num_items
         self.attr = attr
         assert attr.shape[0] >= self.num_items
         _, self.num_attrs = attr.shape
-        self.bpr_k = [self.num_users/5,bpr_k][bpr_k!=None]
-        if bpr_args==None:
-            self.bpr_args = bpr.BPRArgs(0.01, 1.0, 0.02125, 0.00355, 0.00355)
+        if bpr_model==None:
+            self.bpr_k = [self.num_users/5,bpr_k][bpr_k!=None]
+            if bpr_args==None:
+                self.bpr_args = bpr.BPRArgs(0.01, 1.0, 0.02125, 0.00355, 0.00355)
+            else:
+                self.bpr_args = bpr_args
+            self.bpr_model = bpr.BPR(self.bpr_k, self.bpr_args)
         else:
-            self.bpr_args = bpr_args
-        self.bpr_model = bpr.BPR(self.bpr_k, self.bpr_args)
+            self.bpr_model = bpr_model
+            self.bpr_k = bpr_model.D
+            self.bpr_args = bpr.BPRArgs(bpr_model.learning_rate, \
+                bpr_model.bias_regularization, \
+                bpr_model.user_regularization, \
+                bpr_model.positive_item_regularization, \
+                bpr_model.negative_item_regularization, \
+                bpr_model.update_negative_item_factors)
         sample_negative_items_empirically = False
         self.sampler = bpr.UniformUserUniformItem(sample_negative_items_empirically)
     
@@ -72,14 +81,13 @@ class Mapper(object):
         return similarity
 
     def accuracy(self, threshold=0.5):
-        #FIXME: not tested
         result = 0.0
         for i in range(self.num_test_items):
             pred_i = self.test_predict(i)
             for u in range(self.num_users):
                 posidx = self.test_data[u].indices
                 if (pred_i[u]>=threshold and (i in posidx)) or (pred_i[u]<threshold and (not i in posidx)):
-                    result += 1.
+                    result += 1
         result /= (self.num_items * self.num_users)
         return result
 
@@ -127,19 +135,18 @@ class Mapper(object):
         return result 
 
     def cross_validation(self, cv_num_iters, cv_set, cv_folds):
-        #FIXME: not tested
         origin_data = self.data
         origin_attr = self.attr
         origin_model = self.bpr_model
         splitter = ds.DataSplitter(origin_data, origin_attr, cv_folds)
         datamats = splitter.split_data()
         attrmats = splitter.split_attr()
-        bestacc = 0
+        bestscore = 0.0
         bestpara = None
         for para in cv_set:
             self.set_parameter(para)
-            avg_acc = 0
-            print "Cross-validating parameter",para
+            avg_score = 0.0
+            print "Cross-validating parameter",para,"........."
             for i in range(cv_folds):
                 tmp_data = copy(datamats)
                 tmp_data.pop(i)
@@ -148,19 +155,20 @@ class Mapper(object):
                 self.init(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), self.bpr_k, self.bpr_args)
                 self.train(cv_num_iters)
                 self.test_init(datamats[i].tocsr(), attrmats[i].tocsr())
-                avg_acc += self.accuracy()
-            avg_acc /= cv_folds
-            if (avg_acc > bestacc):
+                #avg_score += self.accuracy()
+                avg_score += self.prec_at_n(5)
+            avg_score /= cv_folds
+            if (avg_score > bestscore):
                 bestpara = para
-        print "best parameter in cross-validation :", bestpara, "with accuracy", bestacc
-        self.data = origin_data
-        self.attr = origin_attr
-        self.bpr_model = origin_model
+                bestscore = avg_score
+        #print "best parameter in cross-validation :", bestpara, "with accuracy", bestscore
+        print "best parameter in cross-validation :", bestpara, "with prec@n", bestscore
+        self.init(origin_data, origin_attr, None, None, origin_model)
         return para
 
 class Map_KNN(Mapper):
 
-    #FIXME: not tested
+    #FIXME: very strange to have worse accuracy than just random, under cross-validation
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, k=1):
         self.init(data, attr, bpr_k, bpr_args)
         self.k = k
@@ -194,7 +202,6 @@ class Map_KNN(Mapper):
 
 class Map_Linear(Mapper):
 
-    #FIXME: not tested
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty_factor=None):
         self.init(data, attr, bpr_k, bpr_args)
         self.learning_rate = learning_rate
@@ -204,18 +211,18 @@ class Map_Linear(Mapper):
         self.bpr_model.train(self.data, self.sampler, num_iters)
         #train linear models for bpr_k column across attributes(X=attrs, Y=H[u])
         self.mapper_factors = np.random.random_sample((self.bpr_k, self.num_attrs))
-        self.mapper_bias = np.zeros(self.bpr_k)
+        self.mapper_bias = np.zeros((self.bpr_k, 1))
         self.mapper_factors_b = np.random.random_sample(self.num_attrs)
         self.mapper_bias_b = np.zeros(1)
-        x = self.attrs.toarray()
+        x = self.attr.toarray()
         for _ in range(num_iters):
             gradient = np.dot( \
-                np.dot(self.mapper_factors, x.transpose())+self.mapper_bias*np.ones(num_items)-self.bpr_model.item_factors.transpose() \
+                np.dot(self.mapper_factors, x.transpose())+np.dot(self.mapper_bias, np.ones((1, self.num_items)))-self.bpr_model.item_factors.transpose() \
                 , x) \
                 + self.penalty_factor*self.mapper_factors
             self.mapper_factors -= self.learning_rate/self.num_items*gradient
             gradient_b = np.dot( \
-                np.dot(self.mapper_factors_b, x.transpose())+self.mapper_bias_b*np.ones(num_items)-self.bpr_model.item_bias \
+                np.dot(self.mapper_factors_b, x.transpose())+self.mapper_bias_b*np.ones(self.num_items)-self.bpr_model.item_bias \
                 , x) \
                 + self.penalty_factor*self.mapper_factors_b
             self.mapper_factors_b -= self.learning_rate/self.num_items*gradient_b
@@ -228,7 +235,7 @@ class Map_Linear(Mapper):
         result = []
         i_factors = self.mapper_bias + np.dot(self.mapper_factors, self.test_attr[i].transpose().toarray())
         i_bias = self.mapper_bias_b + np.dot(self.mapper_factors_b, self.test_attr[i].transpose().toarray())
-        for j in range(self.num_users):
+        for u in range(self.num_users):
             result.append(i_bias + np.dot(self.bpr_model.user_factors[u], i_factors))
         return result
 
@@ -238,7 +245,6 @@ class Map_Linear(Mapper):
 
 class Map_BPR(Mapper):
 
-    #FIXME: not tested
     def __init__(self, data, attr, bpr_k=None, bpr_args=None, learning_rate=None, penalty_factor=None):
         self.init(data, attr, bpr_k, bpr_args)
         self.learning_rate = learning_rate
@@ -248,29 +254,29 @@ class Map_BPR(Mapper):
         self.bpr_model.train(self.data, self.sampler, num_iters)
         #train linear models for bpr_k column across attributes(X=attrs, Y=H[u])
         self.mapper_factors = np.random.random_sample((self.bpr_k, self.num_attrs))
-        self.mapper_bias = np.zeros(self.bpr_k)
+        self.mapper_bias = np.zeros((self.bpr_k, 1))
         self.mapper_factors_b = np.random.random_sample(self.num_attrs)
         self.mapper_bias_b = np.zeros(1)
-        x = self.attrs.toarray()
+        x = self.attr.toarray()
         for _ in range(num_iters):
             for u,i,j in self.sampler.generate_samples(self.data):
                 x_uij = self.predict(u,i) - self.predict(u,j)
                 #XXX: maybe it should be exp(-x)/(1.0+exp(-x))
-                z = 1.0/(1.0+exp(x_uij))
+                #z = 1.0/(1.0+exp(x_uij))
+                z = 1.0 - 1.0/(1.0+exp(-x_uij))
+                u_factor = np.atleast_2d(self.bpr_model.user_factors[u,:]).transpose()
+                ij_diff = np.atleast_2d(x[i]-x[j])
 
-                gradient = z * np.dot( \
-                    self.bpr_model.user_factors[u,:].transpose() \
-                    , x[i]-x[j] ) 
+                gradient = z * np.dot(u_factor, ij_diff) 
                 self.mapper_factors = self.learning_rate * ( \
                     gradient - self.penalty_factor * self.mapper_factors )
                 self.mapper_bias = self.learning_rate * ( \
-                    z * self.bpr_model.user_factors[u,:] \
+                    z * u_factor \
                     - self.penalty_factor * self.mapper_bias )
 
     def predict(self, u, i):
         return np.dot( self.bpr_model.user_factors[u,:] \
-            , np.dot(self.mapper_factors, self.attrs[i].toarray().transpose()) \
-            ) + self.mapper_bias[i]
+            , np.dot(self.mapper_factors, self.attr[i].toarray().transpose())+self.mapper_bias )
 
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr) 
@@ -280,7 +286,7 @@ class Map_BPR(Mapper):
         result = []
         i_factors = self.mapper_bias + np.dot(self.mapper_factors, self.test_attr[i].transpose().toarray())
         #no i_bias here because we didn't use actual h_i in trainning
-        for j in range(self.num_users):
+        for u in range(self.num_users):
             result.append(np.dot(self.bpr_model.user_factors[u], i_factors))
         return result
 
