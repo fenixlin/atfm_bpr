@@ -6,7 +6,7 @@ implementing different sampling strategies.
 """
 
 import numpy as np
-from math import exp
+from math import exp, log
 import random
 
 class BPRArgs(object):
@@ -102,7 +102,9 @@ class BPR(object):
         ranking_loss = 0;
         for u,i,j in self.loss_samples:
             x = self.predict(u,i) - self.predict(u,j)
-            ranking_loss += 1.0/(1.0+exp(x))
+            #it should be ln(1.0/(1.0+exp(-x)) according to thesis)
+            #ranking_loss += 1.0/(1.0+exp(x))
+            ranking_loss += log(1.0/(1.0+exp(-x)))
 
         complexity = 0;
         for u,i,j in self.loss_samples:
@@ -112,7 +114,9 @@ class BPR(object):
             complexity += self.bias_regularization * self.item_bias[i]**2
             complexity += self.bias_regularization * self.item_bias[j]**2
 
-        return ranking_loss + 0.5*complexity
+        #XXX: where does 0.5 come from? returns negative BPR-OPT so that it looks we are minimizing it
+        #return ranking_loss + 0.5*complexity
+        return -ranking_loss + complexity
 
     def predict(self,u,i):
         return self.item_bias[i] + np.dot(self.user_factors[u],self.item_factors[i])
@@ -136,19 +140,25 @@ class Sampler(object):
         return u
 
     def sample_negative_item(self,user_items):
-        j = self.random_item()
+        sample_op = self.sample_negative_items_empirically
+        j = self.random_item(sample_op)
+        num_run = 1
         while j in user_items:
-            j = self.random_item()
+            j = self.random_item(sample_op)
+            num_run += 1
+            if num_run > self.num_items:
+                # in case no one rate items watched by this user
+                sample_op = False
         return j
 
     def uniform_user(self):
         return random.randint(0,self.num_users-1)
 
-    def random_item(self):
+    def random_item(self, sample_empirically):
         """sample an item uniformly or from the empirical distribution
            observed in the training data
         """
-        if self.sample_negative_items_empirically:
+        if sample_empirically:
             # just pick something someone rated!
             u = self.uniform_user()
             if len(self.data[u].indices)<=0:

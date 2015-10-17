@@ -29,7 +29,11 @@ if __name__ == '__main__':
     cv_iters = 30
     cv_folds = 4
     num_iters = 100
-    avg_prec = avg_auc = 0
+    avg_prec = 0
+    avg_auc = 0
+
+    assert num_folds>1
+    assert cv_folds>1
     #training & testing
     for i in range(num_folds):
         tmp_data = copy(datamats)

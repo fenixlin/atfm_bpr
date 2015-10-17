@@ -11,8 +11,9 @@ class DataSplitter(object):
         self.attrmat = attrmat
         self.k = k
         _, self.num_items = datamat.shape
+        assert self.k<=self.num_items
         self.index = [i for i in range(self.num_items)]
-        random.shuffle(self.index)
+        #random.shuffle(self.index)
 
     def split_data(self):
         base = 0
