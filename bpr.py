@@ -50,7 +50,7 @@ class BPR(object):
             #print 'starting iteration {0}'.format(it)
             for u,i,j in sampler.generate_samples(self.data):
                 self.update_factors(u,i,j)
-            #print 'iteration {0}: loss = {1}'.format(it,self.loss())
+            print 'iteration {0}: loss = {1}'.format(it,self.loss())
 
     def init(self,data):
         self.data = data
@@ -66,7 +66,7 @@ class BPR(object):
         # apply rule of thumb to decide num samples over which to compute loss
         num_loss_samples = int(100*self.num_users**0.5)
 
-        sampler = UniformUserUniformItem(True)
+        sampler = UniformUserUniformItem()
         self.loss_samples = [t for t in sampler.generate_samples(self.data,num_loss_samples)]
 
     def update_factors(self,u,i,j,update_u=True,update_i=True):
@@ -125,8 +125,8 @@ class BPR(object):
 
 class Sampler(object):
 
-    def __init__(self,sample_negative_items_empirically):
-        self.sample_negative_items_empirically = sample_negative_items_empirically
+    def __init__(self):
+        pass
 
     def init(self,data,max_samples=None):
         self.data = data
@@ -140,33 +140,13 @@ class Sampler(object):
         return u
 
     def sample_negative_item(self,user_items):
-        sample_op = self.sample_negative_items_empirically
-        j = self.random_item(sample_op)
-        num_run = 1
+        j = random.randint(0,self.num_items-1)
         while j in user_items:
-            j = self.random_item(sample_op)
-            num_run += 1
-            if num_run > self.num_items:
-                # in case no one rate items watched by this user
-                sample_op = False
+            j = random.randint(0,self.num_items-1)
         return j
 
     def uniform_user(self):
         return random.randint(0,self.num_users-1)
-
-    def random_item(self, sample_empirically):
-        """sample an item uniformly or from the empirical distribution
-           observed in the training data
-        """
-        if sample_empirically:
-            # just pick something someone rated!
-            u = self.uniform_user()
-            if len(self.data[u].indices)<=0:
-                return random.randint(0,self.num_items-1)
-            i = random.choice(self.data[u].indices)
-        else:
-            i = random.randint(0,self.num_items-1)
-        return i
 
     def num_samples(self,n):
         if self.max_samples is None:
@@ -179,13 +159,14 @@ class UniformUserUniformItem(Sampler):
         self.init(data,max_samples)
         for _ in xrange(self.num_samples(self.data.nnz)):
             u = self.uniform_user()
+            indices = self.data[u].indices
             # sample positive item
-            num_pos = len(self.data[u].indices)
+            num_pos = len(indices)
             if (num_pos<=0 or num_pos==self.num_items):
                 #throw bad user samples out
                 continue
-            i = random.choice(self.data[u].indices)
-            j = self.sample_negative_item(self.data[u].indices)
+            i = random.choice(indices)
+            j = self.sample_negative_item(indices)
             yield u,i,j
 
 class UniformUserUniformItemWithoutReplacement(Sampler):
@@ -267,7 +248,6 @@ if __name__ == '__main__':
     num_factors = 10
     model = BPR(num_factors,args)
 
-    sample_negative_items_empirically = True
-    sampler = UniformPairWithoutReplacement(sample_negative_items_empirically)
+    sampler = UniformPairWithoutReplacement()
     num_iters = 10
     model.train(data,sampler,num_iters)

@@ -29,7 +29,6 @@ class Mapper(object):
 
     def init(self, data, attr, bpr_k=None, bpr_args=None, bpr_model=None):
         assert sp.isspmatrix_csr(data)
-        assert sp.isspmatrix_csr(attr)
         self.data = data
         self.num_users, self.num_items = data.shape
         self.attr = attr
@@ -51,18 +50,13 @@ class Mapper(object):
                 bpr_model.positive_item_regularization, \
                 bpr_model.negative_item_regularization, \
                 bpr_model.update_negative_item_factors)
-        sample_negative_items_empirically = False
-        self.sampler = bpr.UniformUserUniformItem(sample_negative_items_empirically)
+        self.sampler = bpr.UniformUserUniformItem()
     
     def test_init(self, test_data, test_attr):
         assert sp.isspmatrix_csr(test_data)
-        assert sp.isspmatrix_csr(test_attr)
         self.num_test_items, _ = test_attr.shape
         self.test_data = test_data
         self.test_attr = test_attr
-
-    def _row_dot(self, x, y):
-        return x.dot(y.transpose()).sum()
 
     def cos_similarity(self, i):
         try:
@@ -72,13 +66,13 @@ class Mapper(object):
             self.attr_sqr_cache = []
             self.tattr_sqr_cache = []
             for j in range(self.num_items):
-                self.attr_sqr_cache.append(sqrt(self._row_dot(self.attr[j], self.attr[j])))
+                self.attr_sqr_cache.append(sqrt(np.dot(self.attr[j], self.attr[j])))
             for j in range(self.num_test_items):
-                self.tattr_sqr_cache.append(sqrt(self._row_dot(self.test_attr[j], self.test_attr[j])))
+                self.tattr_sqr_cache.append(sqrt(np.dot(self.test_attr[j], self.test_attr[j])))
 
         similarity = []
         for j in range(self.num_items):
-            similarity.append(self._row_dot(self.test_attr[i], self.attr[j]) / (self.tattr_sqr_cache[i] * self.attr_sqr_cache[j]))
+            similarity.append(np.dot(self.test_attr[i], self.attr[j]) / (self.tattr_sqr_cache[i] * self.attr_sqr_cache[j]))
         return similarity
 
     def accuracy(self, threshold=0.5):
@@ -106,9 +100,9 @@ class Mapper(object):
         for u in range(self.num_users):
             cand[u].sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
             tmp = 0.0
-            row_u = self.test_data[u].toarray()[0]
+            row_u = self.test_data[u].indices
             for i in range(prec_n):
-                if row_u[cand[u][i][1]]>0:
+                if cand[u][i][1] in row_u:
                     tmp += 1
             result += tmp/prec_n
         result /= self.num_users
@@ -131,7 +125,7 @@ class Mapper(object):
                 for i in posidx:
                     if pred[u][i]-pred[u][j]>=0:
                         tmp += 1
-            real_pos = len(self.test_data[u].indices)
+            real_pos = len(posidx)
             result += tmp/max(real_pos, 1)/max(self.num_test_items-real_pos, 1)
         result /= self.num_users
         return result 
@@ -154,12 +148,15 @@ class Mapper(object):
                 tmp_data.pop(i)
                 tmp_attr = copy(attrmats)
                 tmp_attr.pop(i)
-                self.init(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), self.bpr_k, self.bpr_args)
+                self.init(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), self.bpr_k, self.bpr_args)
                 self.train(cv_num_iters)
-                self.test_init(datamats[i].tocsr(), attrmats[i].tocsr())
+                self.test_init(datamats[i].tocsr(), attrmats[i])
                 #avg_score += self.accuracy()
-                avg_score += self.prec_at_n(5)
+                cur_score = self.prec_at_n(5)
+                print "prec@5 of cross-validation fold",i,":",cur_score
+                avg_score += cur_score
             avg_score /= cv_folds
+            print "Average score for parameter after cross-validation",para,":",avg_score
             if (avg_score > bestscore):
                 bestpara = para
                 bestscore = avg_score
@@ -216,16 +213,16 @@ class Map_Linear(Mapper):
         self.mapper_bias = np.zeros((self.bpr_k, 1))
         self.mapper_factors_b = np.random.random_sample(self.num_attrs)
         self.mapper_bias_b = np.zeros(1)
-        x = self.attr.toarray()
-        for _ in range(num_iters):
+        for it in range(num_iters):
+            print "Mapper Map_Linear trainning for iteration",it,"..."
             gradient = np.dot( \
-                np.dot(self.mapper_factors, x.transpose())+np.dot(self.mapper_bias, np.ones((1, self.num_items)))-self.bpr_model.item_factors.transpose() \
-                , x) \
+                np.dot(self.mapper_factors, self.attr)+np.dot(self.mapper_bias, np.ones((1, self.num_items)))-self.bpr_model.item_factors.transpose() \
+                , self.attr) \
                 + self.penalty_factor*self.mapper_factors
             self.mapper_factors -= self.learning_rate/self.num_items*gradient
             gradient_b = np.dot( \
-                np.dot(self.mapper_factors_b, x.transpose())+self.mapper_bias_b*np.ones(self.num_items)-self.bpr_model.item_bias \
-                , x) \
+                np.dot(self.mapper_factors_b, self.attr)+self.mapper_bias_b*np.ones(self.num_items)-self.bpr_model.item_bias \
+                , self.attr) \
                 + self.penalty_factor*self.mapper_factors_b
             self.mapper_factors_b -= self.learning_rate/self.num_items*gradient_b
 
@@ -235,8 +232,8 @@ class Map_Linear(Mapper):
 
     def test_predict(self, i):
         result = []
-        i_factors = self.mapper_bias + np.dot(self.mapper_factors, self.test_attr[i].transpose().toarray())
-        i_bias = self.mapper_bias_b + np.dot(self.mapper_factors_b, self.test_attr[i].transpose().toarray())
+        i_factors = self.mapper_bias + np.dot(self.mapper_factors, self.test_attr[i])
+        i_bias = self.mapper_bias_b + np.dot(self.mapper_factors_b, self.test_attr[i])
         for u in range(self.num_users):
             result.append(i_bias + np.dot(self.bpr_model.user_factors[u], i_factors))
         return result
@@ -259,15 +256,15 @@ class Map_BPR(Mapper):
         #self.mapper_bias = np.zeros((self.bpr_k, 1))
         #self.mapper_factors_b = np.random.random_sample(self.num_attrs)
         #self.mapper_bias_b = np.zeros(1)
-        x = self.attr.toarray()
-        for _ in range(num_iters):
+        for it in range(num_iters):
+            print "Mapper Map_BPR trainning for iteration",it,"..."
             for u,i,j in self.sampler.generate_samples(self.data):
                 x_uij = self.predict(u,i) - self.predict(u,j)
                 #XXX: maybe it should be exp(-x)/(1.0+exp(-x))
                 #z = 1.0/(1.0+exp(x_uij))
                 z = 1.0 - 1.0/(1.0+exp(-x_uij))
                 u_factor = np.atleast_2d(self.bpr_model.user_factors[u,:]).transpose()
-                ij_diff = np.atleast_2d(x[i]-x[j])
+                ij_diff = np.atleast_2d(self.attr[i]-self.attr[j])
 
                 gradient = z * np.dot(u_factor, ij_diff) 
                 self.mapper_factors = self.learning_rate * ( \
@@ -278,7 +275,7 @@ class Map_BPR(Mapper):
 
     def predict(self, u, i):
         return np.dot( self.bpr_model.user_factors[u,:] \
-            , np.dot(self.mapper_factors, self.attr[i].toarray().transpose()) )
+            , np.dot(self.mapper_factors, self.attr[i]) )
             #\+self.mapper_bias )
 
     def test(self, test_data, test_attr, prec_n=5):
@@ -287,7 +284,7 @@ class Map_BPR(Mapper):
 
     def test_predict(self, i):
         result = []
-        i_factors = np.dot(self.mapper_factors, self.test_attr[i].transpose().toarray())
+        i_factors = np.dot(self.mapper_factors, self.test_attr[i])
             #\+self.mapper_bias
         #no i_bias here because we didn't use actual h_i in trainning
         for u in range(self.num_users):

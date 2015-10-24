@@ -17,23 +17,22 @@ if __name__ == '__main__':
         exit()
 
     data = sp.csr_matrix(np.loadtxt(sys.argv[1]))
-    attr = sp.csr_matrix(np.loadtxt(sys.argv[2]))
+    attr = np.loadtxt(sys.argv[2])
     num_folds = 5
+    bpr_args = BPRArgs(0.1, 1.0, 0.2125, 0.0355, 0.0355)
+    bpr_k = 32
+    cv_iters = 20
+    cv_folds = 4
+    num_iters = 100
 
     splitter = ds.DataSplitter(data, attr, num_folds)
     datamats = splitter.split_data()
     attrmats = splitter.split_attr()
 
-    bpr_args = BPRArgs(0.1, 1.0, 0.2125, 0.0355, 0.0355)
-    bpr_k = 3
-    cv_iters = 30
-    cv_folds = 4
-    num_iters = 100
-    avg_prec = 0
-    avg_auc = 0
-
     assert num_folds>1
     assert cv_folds>1
+    avg_prec = 0
+    avg_auc = 0
     #training & testing
     for i in range(num_folds):
         tmp_data = copy(datamats)
@@ -42,23 +41,23 @@ if __name__ == '__main__':
         tmp_attr.pop(i)
 
         cv_parameter_set = [(0.03,0.03), (0.03,0.1), (0.1,0.03), (0.1,0.1)]
-        model = mapper.Map_BPR(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+        model = mapper.Map_BPR(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), bpr_k, bpr_args)
 
         #cv_parameter_set = [(0.03,0.03), (0.03,0.1), (0.1,0.03), (0.1,0.1)]
-        #model = mapper.Map_Linear(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+        #model = mapper.Map_Linear(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), bpr_k, bpr_args)
 
         #cv_parameter_set = [1, 2, 3]
-        #model = mapper.Map_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+        #model = mapper.Map_KNN(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), bpr_k, bpr_args)
 
-        #model = mapper.CBF_KNN(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+        #model = mapper.CBF_KNN(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), bpr_k, bpr_args)
 
-        #model = mapper.Map_Random(sp.hstack(tmp_data).tocsr(), sp.vstack(tmp_attr).tocsr(), bpr_k, bpr_args)
+        #model = mapper.Map_Random(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), bpr_k, bpr_args)
 
         para = model.cross_validation(cv_iters, cv_parameter_set, cv_folds)
         model.set_parameter(para)
         model.train(num_iters)
 
-        prec, auc = model.test(datamats[i].tocsr(), attrmats[i].tocsr())
+        prec, auc = model.test(datamats[i].tocsr(), attrmats[i])
         print "Test for fold",i,": Prec@n =",prec,"auc =",auc
         print "------------------------------------------------"
         avg_prec += prec
