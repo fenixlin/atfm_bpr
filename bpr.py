@@ -1,4 +1,6 @@
 """
+Copyright (c) 2015 Fenix Lin
+
 Bayesian Personalized Ranking
 
 Matrix Factorization model and a variety of classes
@@ -7,6 +9,7 @@ implementing different sampling strategies.
 
 import numpy as np
 from math import exp, log
+from copy import deepcopy
 import random
 
 class BPRArgs(object):
@@ -38,23 +41,24 @@ class BPR(object):
         self.negative_item_regularization = args.negative_item_regularization
         self.update_negative_item_factors = args.update_negative_item_factors
 
-    def train(self,data,sampler,num_iters):
+    def train(self,dataidx,num_items,sampler,num_iters):
         """train model
         data: user-item matrix as a scipy sparse matrix
               users and items are zero-indexed
         """
-        self.init(data)
+        self.init(dataidx,num_items)
 
         #print 'initial loss = {0}'.format(self.loss())
         for it in xrange(num_iters):
             #print 'starting iteration {0}'.format(it)
-            for u,i,j in sampler.generate_samples(self.data):
+            for u,i,j in sampler.generate_samples(self.dataidx, self.num_items):
                 self.update_factors(u,i,j)
             print 'iteration {0}: loss = {1}'.format(it,self.loss())
 
-    def init(self,data):
-        self.data = data
-        self.num_users,self.num_items = self.data.shape
+    def init(self,dataidx,num_items):
+        self.dataidx = dataidx
+        self.num_users = len(dataidx)
+        self.num_items = num_items
 
         self.item_bias = np.zeros(self.num_items)
         self.user_factors = np.random.random_sample((self.num_users,self.D))
@@ -67,7 +71,7 @@ class BPR(object):
         num_loss_samples = int(100*self.num_users**0.5)
 
         sampler = UniformUserUniformItem()
-        self.loss_samples = [t for t in sampler.generate_samples(self.data,num_loss_samples)]
+        self.loss_samples = [t for t in sampler.generate_samples(self.dataidx,self.num_items,num_loss_samples)]
 
     def update_factors(self,u,i,j,update_u=True,update_i=True):
         """apply SGD update"""
@@ -128,15 +132,19 @@ class Sampler(object):
     def __init__(self):
         pass
 
-    def init(self,data,max_samples=None):
-        self.data = data
-        self.num_users,self.num_items = data.shape
+    def init(self,dataidx,num_items,max_samples=None):
+        self.dataidx = dataidx
+        self.num_users = len(dataidx)
+        self.num_items = num_items
         self.max_samples = max_samples
+        self.datannz = 0
+        for u in range(self.num_users):
+            self.datannz += len(dataidx[u])
 
     def sample_user(self):
         u = self.uniform_user()
-        num_items = self.data[u].getnnz()
-        assert(num_items > 0 and num_items != self.num_items)
+        num_pos = len(self.dataidx[u])
+        assert(num_pos > 0 and num_pos != self.num_items)
         return u
 
     def sample_negative_item(self,user_items):
@@ -155,11 +163,11 @@ class Sampler(object):
 
 class UniformUserUniformItem(Sampler):
 
-    def generate_samples(self,data,max_samples=None):
-        self.init(data,max_samples)
-        for _ in xrange(self.num_samples(self.data.nnz)):
+    def generate_samples(self,dataidx,num_items,max_samples=None):
+        self.init(dataidx,num_items,max_samples)
+        for _ in xrange(self.num_samples(self.datannz)):
             u = self.uniform_user()
-            indices = self.data[u].indices
+            indices = self.dataidx[u]
             # sample positive item
             num_pos = len(indices)
             if (num_pos<=0 or num_pos==self.num_items):
@@ -171,51 +179,24 @@ class UniformUserUniformItem(Sampler):
 
 class UniformUserUniformItemWithoutReplacement(Sampler):
 
-    def generate_samples(self,data,max_samples=None):
-        self.init(self,data,max_samples)
+    def generate_samples(self,dataidx,num_items,max_samples=None):
+        self.init(dataidx,num_items,max_samples)
         # make a local copy of data as we're going to "forget" some entries
-        self.local_data = self.data.copy()
-        for _ in xrange(self.num_samples(self.data.nnz)):
+        self.local_dataidx = deepcopy(self.dataidx)
+        for _ in xrange(self.num_samples(self.datannz)):
             u = self.uniform_user()
             # sample positive item without replacement if we can
-            user_items = self.local_data[u].nonzero()[1]
-            if len(user_items) == 0:
+            user_items = self.local_dataidx[u]
+            if user_items.size == 0:
+                if self.dataidx[u].size == 0:
+                    continue
                 # reset user data if it's all been sampled
-                for ix in self.local_data[u].indices:
-                    self.local_data[u,ix] = self.data[u,ix]
-                user_items = self.local_data[u].nonzero()[1]
-            i = random.choice(user_items)
+                self.local_dataidx[u] = self.dataidx[u].copy()
+                user_items = self.local_dataidx[u]
+            i = random.randint(0,user_items.size-1)
             # forget this item so we don't sample it again for the same user
-            self.local_data[u,i] = 0
+            self.local_dataidx[u] = np.delete(user_items,i)
             j = self.sample_negative_item(user_items)
-            yield u,i,j
-
-class UniformPair(Sampler):
-
-    def generate_samples(self,data,max_samples=None):
-        self.init(data,max_samples)
-        for _ in xrange(self.num_samples(self.data.nnz)):
-            idx = random.randint(0,self.data.nnz-1)
-            u = self.users[self.idx]
-            i = self.items[self.idx]
-            j = self.sample_negative_item(self.data[u].indices)
-            yield u,i,j
-
-class UniformPairWithoutReplacement(Sampler):
-
-    def generate_samples(self,data,max_samples=None):
-        self.init(data,max_samples)
-        idxs = range(self.data.nnz)
-        random.shuffle(idxs)
-        self.users,self.items = self.data.nonzero()
-        self.users = self.users[idxs]
-        self.items = self.items[idxs]
-        self.idx = 0
-        for _ in xrange(self.num_samples(self.data.nnz)):
-            u = self.users[self.idx]
-            i = self.items[self.idx]
-            j = self.sample_negative_item(self.data[u].indices)
-            self.idx += 1
             yield u,i,j
 
 class ExternalSchedule(Sampler):
@@ -224,30 +205,11 @@ class ExternalSchedule(Sampler):
         self.filepath = filepath
         self.index_offset = index_offset
 
-    def generate_samples(self,data,max_samples=None):
-        self.init(data,max_samples)
+    def generate_samples(self,dataidx,num_items,max_samples=None):
+        self.init(dataidx,num_items,max_samples)
         f = open(self.filepath)
         samples = [map(int,line.strip().split()) for line in f]
         random.shuffle(samples)  # important!
         num_samples = self.num_samples(len(samples))
         for u,i,j in samples[:num_samples]:
             yield u-self.index_offset,i-self.index_offset,j-self.index_offset
-
-if __name__ == '__main__':
-
-    # learn a matrix factorization with BPR like this:
-
-    import sys
-    from scipy.io import mmread
-
-    data = mmread(sys.argv[1]).tocsr()
-
-    args = BPRArgs()
-    args.learning_rate = 0.3
-
-    num_factors = 10
-    model = BPR(num_factors,args)
-
-    sampler = UniformPairWithoutReplacement()
-    num_iters = 10
-    model.train(data,sampler,num_iters)

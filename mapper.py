@@ -1,4 +1,6 @@
 """
+Copyright (c) 2015 Fenix Lin
+
 Attribute to feature mapping functions for items
 
 map-knn(k) : predict matrix factor H with cosine similarity as weight.
@@ -28,7 +30,7 @@ class Mapper(object):
         pass
 
     def init(self, data, attr, bpr_k=None, bpr_args=None, bpr_model=None):
-        assert sp.isspmatrix_csr(data)
+        assert sp.isspmatrix_csc(data)
         self.data = data
         self.num_users, self.num_items = data.shape
         self.attr = attr
@@ -52,11 +54,20 @@ class Mapper(object):
                 bpr_model.update_negative_item_factors)
         self.sampler = bpr.UniformUserUniformItem()
     
+    def train_init(self):
+        tmp = self.data.tocsr()
+        self.dataidx = []
+        for u in range(self.num_users):
+            self.dataidx.append(tmp[u].indices)
+
     def test_init(self, test_data, test_attr):
-        assert sp.isspmatrix_csr(test_data)
+        assert sp.isspmatrix_csc(test_data)
         self.num_test_items, _ = test_attr.shape
-        self.test_data = test_data
+        tmp = test_data.tocsr()
         self.test_attr = test_attr
+        self.test_dataidx = []
+        for u in range(self.num_users):
+            self.test_dataidx.append(tmp[u].indices)
 
     def cos_similarity(self, i):
         try:
@@ -81,7 +92,7 @@ class Mapper(object):
         for i in range(self.num_test_items):
             pred_i = self.test_predict(i)
             for u in range(self.num_users):
-                posidx = self.test_data[u].indices
+                posidx = self.test_dataidx[u]
                 if (pred_i[u]>=threshold and (i in posidx)) or (pred_i[u]<threshold and (not i in posidx)):
                     result += 1
         result /= (self.num_items * self.num_users)
@@ -100,7 +111,7 @@ class Mapper(object):
         for u in range(self.num_users):
             cand[u].sort(lambda x,y : cmp(x[0],y[0]), reverse=True)
             tmp = 0.0
-            row_u = self.test_data[u].indices
+            row_u = self.test_dataidx[u]
             for i in range(prec_n):
                 if cand[u][i][1] in row_u:
                     tmp += 1
@@ -118,7 +129,7 @@ class Mapper(object):
                 pred[u].append(pred_i[u])
         for u in range(self.num_users):
             tmp = 0.0
-            posidx = self.test_data[u].indices
+            posidx = self.test_dataidx[u]
             for j in range(self.num_test_items):
                 if j in posidx:
                     continue
@@ -148,9 +159,9 @@ class Mapper(object):
                 tmp_data.pop(i)
                 tmp_attr = copy(attrmats)
                 tmp_attr.pop(i)
-                self.init(sp.hstack(tmp_data).tocsr(), np.vstack(tmp_attr), self.bpr_k, self.bpr_args)
+                self.init(sp.hstack(tmp_data,"csc"), np.vstack(tmp_attr), self.bpr_k, self.bpr_args)
                 self.train(cv_num_iters)
-                self.test_init(datamats[i].tocsr(), attrmats[i])
+                self.test_init(datamats[i], attrmats[i])
                 #avg_score += self.accuracy()
                 cur_score = self.prec_at_n(5)
                 print "prec@5 of cross-validation fold",i,":",cur_score
@@ -175,7 +186,8 @@ class Map_KNN(Mapper):
         self.k = k
 
     def train(self, num_iters):
-        self.bpr_model.train(self.data, self.sampler, num_iters)
+        self.train_init()
+        self.bpr_model.train(self.dataidx, self.num_items, self.sampler, num_iters)
         
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr)
@@ -207,24 +219,22 @@ class Map_Linear(Mapper):
         self.penalty_factor = penalty_factor
 
     def train(self, num_iters):
-        self.bpr_model.train(self.data, self.sampler, num_iters)
+        self.train_init()
+        self.bpr_model.train(self.dataidx, self.num_items, self.sampler, num_iters)
         #train linear models for bpr_k column across attributes(X=attrs, Y=H[u])
         self.mapper_factors = np.random.random_sample((self.bpr_k, self.num_attrs))
-        self.mapper_bias = np.zeros((self.bpr_k, 1))
+        self.mapper_bias = np.zeros(self.bpr_k)
         self.mapper_factors_b = np.random.random_sample(self.num_attrs)
-        self.mapper_bias_b = np.zeros(1)
+        self.mapper_bias_b = 0
         for it in range(num_iters):
             print "Mapper Map_Linear trainning for iteration",it,"..."
-            gradient = np.dot( \
-                np.dot(self.mapper_factors, self.attr)+np.dot(self.mapper_bias, np.ones((1, self.num_items)))-self.bpr_model.item_factors.transpose() \
-                , self.attr) \
-                + self.penalty_factor*self.mapper_factors
-            self.mapper_factors -= self.learning_rate/self.num_items*gradient
-            gradient_b = np.dot( \
-                np.dot(self.mapper_factors_b, self.attr)+self.mapper_bias_b*np.ones(self.num_items)-self.bpr_model.item_bias \
-                , self.attr) \
-                + self.penalty_factor*self.mapper_factors_b
-            self.mapper_factors_b -= self.learning_rate/self.num_items*gradient_b
+            diff = np.dot(self.attr, self.mapper_factors.transpose()) + np.dot(np.ones((self.num_items,1)), self.mapper_bias.reshape((1,self.bpr_k))) \
+                - self.bpr_model.item_factors 
+            self.mapper_factors -= self.learning_rate/self.num_items*(np.dot(diff.transpose(), self.attr)+self.penalty_factor*self.mapper_factors)
+            self.mapper_bias -= self.learning_rate/self.num_items*(np.dot(diff.transpose(), np.ones(self.num_items)))
+            diff_b = np.dot(self.attr, self.mapper_factors_b) + self.mapper_bias_b*np.ones(self.num_items)-self.bpr_model.item_bias
+            self.mapper_factors_b -= self.learning_rate/self.num_items*(np.dot(diff_b, self.attr) + self.penalty_factor*self.mapper_factors_b)
+            self.mapper_bias_b -= self.learning_rate/self.num_items*(np.dot(diff_b, np.ones(self.num_items)))
 
     def test(self, test_data, test_attr, prec_n=5):
         self.test_init(test_data, test_attr) 
@@ -250,7 +260,8 @@ class Map_BPR(Mapper):
         self.penalty_factor = penalty_factor
 
     def train(self, num_iters):
-        self.bpr_model.train(self.data, self.sampler, num_iters)
+        self.train_init()
+        self.bpr_model.train(self.dataidx, self.num_items, self.sampler, num_iters)
         #train linear models for bpr_k column across attributes(X=attrs, Y=H[u])
         self.mapper_factors = np.random.random_sample((self.bpr_k, self.num_attrs))
         #self.mapper_bias = np.zeros((self.bpr_k, 1))
@@ -258,13 +269,13 @@ class Map_BPR(Mapper):
         #self.mapper_bias_b = np.zeros(1)
         for it in range(num_iters):
             print "Mapper Map_BPR trainning for iteration",it,"..."
-            for u,i,j in self.sampler.generate_samples(self.data):
+            for u,i,j in self.sampler.generate_samples(self.dataidx, self.num_items):
                 x_uij = self.predict(u,i) - self.predict(u,j)
                 #XXX: maybe it should be exp(-x)/(1.0+exp(-x))
                 #z = 1.0/(1.0+exp(x_uij))
                 z = 1.0 - 1.0/(1.0+exp(-x_uij))
-                u_factor = np.atleast_2d(self.bpr_model.user_factors[u,:]).transpose()
-                ij_diff = np.atleast_2d(self.attr[i]-self.attr[j])
+                u_factor = (self.bpr_model.user_factors[u,:]).reshape((self.bpr_k, 1))
+                ij_diff = (self.attr[i]-self.attr[j]).reshape((1, self.num_attrs))
 
                 gradient = z * np.dot(u_factor, ij_diff) 
                 self.mapper_factors = self.learning_rate * ( \
@@ -306,6 +317,7 @@ class CBF_KNN(Mapper):
 
     def train(self, num_iters):
         # underlying bpr model is useless, so no need to train
+        self.train_init()
         pass 
 
     def test(self, test_data, test_attr, prec_n=5):
@@ -319,13 +331,13 @@ class CBF_KNN(Mapper):
             # k is infinity by default
             for u in range(self.num_users):
                 pred_j = 0
-                for j in self.data[u].indices:
+                for j in self.dataidx[u]:
                     pred_j += cos_sim[j]
                 result.append(pred_j)
         else:
             for u in range(self.num_users):
                 cand = []
-                for j in self.data[u].indices:
+                for j in self.dataidx[u]:
                     cand.append(cos_sim[j])
                 cand.sort()
                 pred_j = 0

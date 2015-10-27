@@ -1,3 +1,9 @@
+"""
+Copyright (c) 2015 Fenix Lin
+
+Split data and attr matrix by item randomly into k folds
+"""
+
 import scipy.sparse as sp
 import numpy as np
 import sys
@@ -6,8 +12,8 @@ import random
 class DataSplitter(object):
 
     def __init__(self, datamat, attrmat, k):
-        assert sp.isspmatrix_csr(datamat)
-        self.datamat = datamat.tocsc()
+        assert sp.isspmatrix_csc(datamat)
+        self.datamat = datamat
         self.attrmat = attrmat
         self.k = k
         _, self.num_items = datamat.shape
@@ -23,7 +29,7 @@ class DataSplitter(object):
             for j in range(min(self.num_items-base, self.num_items/self.k)):
                 tmp.append(self.datamat.getcol(self.index[base+j]))
             base += self.num_items/self.k
-            result.append(sp.hstack(tmp))
+            result.append(sp.hstack(tmp,"csc"))
         return result
 
     def split_attr(self):
